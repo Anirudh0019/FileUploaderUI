@@ -2,7 +2,6 @@ import React from 'react';
 import { FileText, AlertCircle } from 'lucide-react';
 import FileUploader from './components/FileUploader';
 import FileInfo from './components/FileInfo';
-import { convertDocxToPdf } from './utils/docxToPdf';
 import { useDarkMode } from './DarkMode'; // Importing context hook
 import DarkModeToggle from './DarkModeToggle';
 
@@ -27,9 +26,24 @@ function App() {
     try {
       setConverting(true);
       setError(null);
-      const pdfBlob = await convertDocxToPdf(selectedFile);
 
-      const url = URL.createObjectURL(pdfBlob);
+      // Prepare form data for file upload
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+
+      // Send file to backend for conversion
+      const response = await fetch('http://localhost:3000/convert', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error('Error converting file. Please try again.');
+      }
+
+      // Download the converted PDF
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
       link.download = `${selectedFile.name.replace('.docx', '')}.pdf`;
