@@ -9,7 +9,7 @@ export async function convertDocxToPdf(file) {
   try {
     const arrayBuffer = await file.arrayBuffer();
     const { content, styles } = await parseDocxContent(arrayBuffer);
-    
+
     if (!content || content.length === 0) {
       throw new Error('No content found in the document');
     }
@@ -18,7 +18,7 @@ export async function convertDocxToPdf(file) {
     const pdfDoc = await PDFDocument.create();
     let currentPage = pdfDoc.addPage();
     const { width, height } = currentPage.getSize();
-    
+
     // Embed fonts
     const regularFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
@@ -40,11 +40,14 @@ export async function convertDocxToPdf(file) {
         if (item.trim()) {
           const style = styles[item] || {};
           const font = style.bold && style.italic ? boldItalicFont :
-                      style.bold ? boldFont :
-                      style.italic ? italicFont :
-                      regularFont;
+                       style.bold ? boldFont :
+                       style.italic ? italicFont :
+                       regularFont;
 
-          currentPage.drawText(item, {
+          // Normalize text for better encoding handling
+          const safeText = item.normalize("NFD").replace(/[^\x00-\x7F]/g, '?');
+
+          currentPage.drawText(safeText, {
             x: margin,
             y: yOffset,
             size: style.size || fontSize,
@@ -53,13 +56,13 @@ export async function convertDocxToPdf(file) {
             maxWidth: width - (margin * 2),
             lineHeight,
           });
-          yOffset -= (lineHeight * Math.ceil(item.length / 80)) + 10;
+          yOffset -= (lineHeight * Math.ceil(safeText.length / 80)) + 10;
         }
       } else if (item.type === 'image') {
         try {
           const imageBytes = await item.data;
           let pdfImage;
-          
+
           if (item.format === 'png') {
             pdfImage = await pdfDoc.embedPng(imageBytes);
           } else if (item.format === 'jpeg' || item.format === 'jpg') {
@@ -105,21 +108,21 @@ async function parseDocxContent(buffer) {
     const zip = await JSZip.loadAsync(buffer);
     const content = [];
     const styles = {};
-    
+
     // Load document content
-    const documentXml = await zip.file('word/document.xml')?.async('text');
+    const documentXml = await zip.file('word/document.xml')?.async('binarystring'); // Read as binary string to handle encoding issues
     if (!documentXml) {
       throw new Error('Invalid DOCX file structure');
     }
 
     const parser = new DOMParser();
     const xmlDoc = parser.parseFromString(documentXml, 'text/xml');
-    
+
     // Load relationships for images
     const relsXml = await zip.file('word/_rels/document.xml.rels')?.async('text');
     const relsDoc = relsXml ? parser.parseFromString(relsXml, 'text/xml') : null;
     const relationships = {};
-    
+
     if (relsDoc) {
       const rels = relsDoc.getElementsByTagName('Relationship');
       for (const rel of rels) {
@@ -138,7 +141,7 @@ async function parseDocxContent(buffer) {
         let paragraphText = '';
         const runs = node.getElementsByTagName('w:r');
         let currentStyle = {};
-        
+
         for (const run of runs) {
           // Parse text formatting
           const rPr = run.getElementsByTagName('w:rPr')[0];
@@ -146,7 +149,7 @@ async function parseDocxContent(buffer) {
             currentStyle = {
               bold: !!rPr.getElementsByTagName('w:b')[0],
               italic: !!rPr.getElementsByTagName('w:i')[0],
-              size: 12 // Default size
+              size: 12, // Default size
             };
           }
 
@@ -157,7 +160,7 @@ async function parseDocxContent(buffer) {
             paragraphText += textContent;
             styles[textContent] = currentStyle;
           }
-          
+
           // Handle images
           const drawings = run.getElementsByTagName('w:drawing');
           for (const drawing of drawings) {
@@ -165,29 +168,29 @@ async function parseDocxContent(buffer) {
               content.push(paragraphText);
               paragraphText = '';
             }
-            
+
             const blipElements = drawing.getElementsByTagName('a:blip');
             for (const blip of blipElements) {
               const rId = blip.getAttribute('r:embed');
               if (rId && relationships[rId]) {
                 const imagePath = `word/${relationships[rId].replace(/^\//, '')}`;
                 const imageFile = zip.file(imagePath);
-                
+
                 if (imageFile) {
-                  const imageData = imageFile.async('uint8array');
+                  const imageData = await imageFile.async('uint8array');
                   const format = imagePath.split('.').pop().toLowerCase();
-                  
+
                   content.push({
                     type: 'image',
                     data: imageData,
-                    format
+                    format,
                   });
                 }
               }
             }
           }
         }
-        
+
         if (paragraphText) {
           content.push(paragraphText);
         }
